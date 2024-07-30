@@ -1,0 +1,148 @@
+bl_info = {
+    "name": "Advanced Image to Decal",
+    "blender": (3, 5, 0),
+    "category": "Object",
+}
+
+import bpy
+from bpy.props import StringProperty, FloatProperty, IntProperty
+
+class OBJECT_OT_advanced_image_to_decal(bpy.types.Operator):
+    """Create an Advanced Decal from an Image with Displacement"""
+    bl_idname = "object.advanced_image_to_decal"
+    bl_label = "Advanced Image to Decal"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        image_path = context.scene.image_path
+        displacement_path = context.scene.displacement_path
+        if not image_path:
+            self.report({'ERROR'}, "No image path specified")
+            return {'CANCELLED'}
+
+        if not context.selected_objects:
+            self.report({'ERROR'}, "No object selected")
+            return {'CANCELLED'}
+
+        # Load the image
+        try:
+            image = bpy.data.images.load(image_path)
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to load image: {str(e)}")
+            return {'CANCELLED'}
+        
+        # Load the displacement map
+        displacement_image = None
+        if displacement_path:
+            try:
+                displacement_image = bpy.data.images.load(displacement_path)
+            except Exception as e:
+                self.report({'ERROR'}, f"Failed to load displacement image: {str(e)}")
+                return {'CANCELLED'}
+
+        # Get the selected object
+        target_obj = context.selected_objects[0]
+
+        # Create a new plane for the decal
+        bpy.ops.mesh.primitive_plane_add(size=context.scene.decal_size)
+        decal_plane = bpy.context.object
+        decal_plane.name = "Decal"
+        
+        # Subdivide the plane
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.subdivide(number_cuts=context.scene.subdivision_count)
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        # Add a new material to the plane
+        material = bpy.data.materials.new(name="DecalMaterial")
+        material.use_nodes = True
+        bsdf = material.node_tree.nodes.get("Principled BSDF")
+        
+        # Add an image texture to the material
+        texture_node = material.node_tree.nodes.new(type='ShaderNodeTexImage')
+        texture_node.image = image
+        material.node_tree.links.new(bsdf.inputs['Base Color'], texture_node.outputs['Color'])
+
+        # Add displacement if a displacement map is provided
+        if displacement_image:
+            displacement_node = material.node_tree.nodes.new(type='ShaderNodeTexImage')
+            displacement_node.image = displacement_image
+            displacement_node.image.colorspace_settings.name = 'Non-Color'
+            displacement = material.node_tree.nodes.new(type='ShaderNodeDisplacement')
+            material.node_tree.links.new(displacement_node.outputs['Color'], displacement.inputs['Height'])
+            material.node_tree.links.new(displacement.outputs['Displacement'], material.node_tree.nodes.get('Material Output').inputs['Displacement'])
+        
+        # Assign the material to the plane
+        if decal_plane.data.materials:
+            decal_plane.data.materials[0] = material
+        else:
+            decal_plane.data.materials.append(material)
+
+        # Add a shrinkwrap modifier to the plane
+        bpy.ops.object.modifier_add(type='SHRINKWRAP')
+        shrinkwrap = decal_plane.modifiers['Shrinkwrap']
+        shrinkwrap.target = target_obj
+        shrinkwrap.wrap_method = 'PROJECT'
+        shrinkwrap.wrap_mode = 'ON_SURFACE'
+        shrinkwrap.use_negative_direction = True
+        shrinkwrap.use_positive_direction = True
+        shrinkwrap.offset = 0.01
+
+        return {'FINISHED'}
+
+class OBJECT_PT_advanced_image_to_decal_panel(bpy.types.Panel):
+    """Panel to create advanced decals"""
+    bl_label = "Advanced Image to Decal"
+    bl_idname = "OBJECT_PT_advanced_image_to_decal_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'Tool'
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(context.scene, "image_path")
+        layout.prop(context.scene, "displacement_path")
+        layout.prop(context.scene, "decal_size")
+        layout.prop(context.scene, "subdivision_count")
+        layout.operator("object.advanced_image_to_decal")
+
+def register():
+    bpy.utils.register_class(OBJECT_OT_advanced_image_to_decal)
+    bpy.utils.register_class(OBJECT_PT_advanced_image_to_decal_panel)
+    bpy.types.Scene.image_path = StringProperty(
+        name="Image Path",
+        description="Path to the image file",
+        default="",
+        subtype='FILE_PATH'
+    )
+    bpy.types.Scene.displacement_path = StringProperty(
+        name="Displacement Path",
+        description="Path to the displacement map",
+        default="",
+        subtype='FILE_PATH'
+    )
+    bpy.types.Scene.decal_size = FloatProperty(
+        name="Decal Size",
+        description="Size of the decal",
+        default=1.0,
+        min=0.01,
+        max=10.0
+    )
+    bpy.types.Scene.subdivision_count = IntProperty(
+        name="Subdivision Count",
+        description="Number of subdivisions for the decal plane",
+        default=5,
+        min=1,
+        max=100
+    )
+
+def unregister():
+    bpy.utils.unregister_class(OBJECT_OT_advanced_image_to_decal)
+    bpy.utils.unregister_class(OBJECT_PT_advanced_image_to_decal_panel)
+    del bpy.types.Scene.image_path
+    del bpy.types.Scene.displacement_path
+    del bpy.types.Scene.decal_size
+    del bpy.types.Scene.subdivision_count
+
+if __name__ == "__main__":
+    register()
